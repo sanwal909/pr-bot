@@ -17,8 +17,7 @@ logging.basicConfig(
 )
 
 # ============ CONFIG FROM ENVIRONMENT ============
-# Railway pe Environment Variables se values aayengi
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7928198485:AAER_Ds7PA5nVKKHEm-7-PWDVVixP4S28Mo")
 ADMIN_ID = os.environ.get("ADMIN_ID", "")
 LOG_CHANNEL = os.environ.get("LOG_CHANNEL", "")
 SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "")
@@ -34,7 +33,6 @@ WARNING_MESSAGES = ["⚠️ Please don't spam!", "⚠️ This is your last warni
 BLOCK_DURATIONS = [300, 900, 1800]  # 5min, 15min, 30min (seconds)
 
 # ============ DATA DIRECTORY SETUP ============
-# Railway volume mount point
 DATA_DIR = "/data"
 
 # Create data directory if it doesn't exist
@@ -70,6 +68,9 @@ def load_data():
         else:
             print("⚠️ No start message data found")
             start_message_data = {}
+            # Create empty file
+            with open(START_MESSAGE_FILE, 'w') as f:
+                json.dump(start_message_data, f)
     except Exception as e:
         print(f"❌ Error loading start message: {e}")
         start_message_data = {}
@@ -83,6 +84,9 @@ def load_data():
         else:
             print("⚠️ No users data found, starting fresh")
             users_data = {}
+            # Create empty file
+            with open(USERS_DATA_FILE, 'w') as f:
+                json.dump(users_data, f)
     except Exception as e:
         print(f"❌ Error loading users data: {e}")
         users_data = {}
@@ -96,6 +100,9 @@ def load_data():
         else:
             print("⚠️ No spam data found")
             spam_data = {}
+            # Create empty file
+            with open(SPAM_DATA_FILE, 'w') as f:
+                json.dump(spam_data, f)
     except Exception as e:
         print(f"❌ Error loading spam data: {e}")
         spam_data = {}
@@ -138,6 +145,20 @@ def save_all_data():
 # Load data on startup
 load_data()
 
+# Auto-save thread function
+def auto_save_data():
+    """Automatically save data every 30 seconds"""
+    while True:
+        time.sleep(30)
+        try:
+            save_all_data()
+        except Exception as e:
+            print(f"❌ Auto-save error: {e}")
+
+# Start auto-save thread
+auto_save_thread = threading.Thread(target=auto_save_data, daemon=True)
+auto_save_thread.start()
+
 # ============ SPAM PROTECTION FUNCTIONS ============
 def update_user_activity(user_id):
     """Update user activity timestamp"""
@@ -166,10 +187,6 @@ def update_user_activity(user_id):
     
     # Add new request
     spam_data[user_id_str]["requests"].append(current_time)
-    
-    # Auto-save every 50 updates
-    if len(spam_data) % 50 == 0:
-        save_spam_data()
     
     return len(spam_data[user_id_str]["requests"])
 
@@ -258,8 +275,6 @@ def check_spam(user_id):
         except:
             pass
         
-        save_spam_data()
-        
         time_left = block_duration
         minutes = time_left // 60
         seconds = time_left % 60
@@ -275,7 +290,6 @@ def check_spam(user_id):
         warning_level = min(2, request_count - 3)
         if spam_data[user_id_str].get("warnings", 0) < warning_level + 1:
             spam_data[user_id_str]["warnings"] = warning_level + 1
-            save_spam_data()
             
             warning_msg = f"{WARNING_MESSAGES[warning_level]}\n\n"
             warning_msg += f"⚠️ <b>You have {MAX_SPAM_COUNT - request_count} attempts left before being blocked!</b>"
@@ -321,8 +335,6 @@ def ban_user(user_id, duration_seconds, reason="", banned_by=ADMIN_ID):
     spam_data[user_id_str]["banned_by"] = banned_by
     spam_data[user_id_str]["block_level"] = 3  # Mark as admin ban
     
-    save_spam_data()
-    
     # Try to notify the user
     try:
         if duration_seconds >= 3600:
@@ -367,7 +379,6 @@ def initialize_spam_data():
             initialized += 1
     
     if initialized > 0:
-        save_spam_data()
         print(f"✅ Initialized spam data for {initialized} users")
 
 # Initialize spam data on startup
@@ -903,6 +914,168 @@ def handle_impdata(message):
         )
         print(f"Import error: {e}")
 
+# ========== /EXPORTDATA COMMAND ==========
+@bot.message_handler(commands=['exportdata'])
+def handle_export_data(message):
+    """Export all users data as JSON file"""
+    if str(message.from_user.id) != ADMIN_ID:
+        return  # Silent fail for non-admin
+    
+    try:
+        # Progress message
+        status_msg = bot.reply_to(message, "📥 <b>Preparing data export...</b>", parse_mode="HTML")
+        
+        # Create comprehensive data export
+        export_data = {
+            "export_info": {
+                "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "total_users": len(users_data),
+                "total_spam_records": len(spam_data),
+                "bot_version": "Premium Bot v1.0",
+                "exported_by": f"@{message.from_user.username}" if message.from_user.username else str(message.from_user.id)
+            },
+            "users": users_data,
+            "spam_data": spam_data,
+            "start_message": start_message_data,
+            "settings": {
+                "max_spam_count": MAX_SPAM_COUNT,
+                "spam_time_window": SPAM_TIME_WINDOW,
+                "amount": AMOUNT,
+                "upi_id": UPI_ID,
+                "upi_name": UPI_NAME,
+                "support_username": SUPPORT_USERNAME,
+                "demo_channel_link": DEMO_CHANNEL_LINK
+            }
+        }
+        
+        bot.edit_message_text(
+            "💾 <b>Creating JSON file...</b>", 
+            chat_id=message.chat.id, 
+            message_id=status_msg.message_id,
+            parse_mode="HTML"
+        )
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"users_data_export_{timestamp}.json"
+        filepath = os.path.join(DATA_DIR, filename)
+        
+        # Save to file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=4, ensure_ascii=False)
+        
+        bot.edit_message_text(
+            "📤 <b>Sending file...</b>", 
+            chat_id=message.chat.id, 
+            message_id=status_msg.message_id,
+            parse_mode="HTML"
+        )
+        
+        # Read file and send
+        with open(filepath, 'rb') as f:
+            bot.send_document(
+                message.chat.id,
+                f,
+                caption=f"""
+✅ <b>DATA EXPORT COMPLETE</b>
+
+📊 <b>Export Statistics:</b>
+┌──────────────────────────┐
+│ • Total Users: {len(users_data):>8} │
+│ • Spam Records: {len(spam_data):>7} │
+│ • File Size: {os.path.getsize(filepath)//1024} KB │
+└──────────────────────────┘
+
+📁 <b>Filename:</b> {filename}
+⏰ <b>Export Time:</b> {timestamp}
+
+<b>⚠️ IMPORTANT:</b> This file contains all user data. Keep it secure!
+                """,
+                parse_mode="HTML"
+            )
+        
+        # Keep file in data directory
+        print(f"✅ Export saved: {filepath}")
+        
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        
+        # Log to admin
+        try:
+            log_msg = f"""
+📤 <b>DATA EXPORTED</b>
+
+👮 Admin: @{message.from_user.username if message.from_user.username else message.from_user.id}
+👥 Total Users: {len(users_data)}
+📁 File: {filename}
+🕒 Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            """
+            bot.send_message(ADMIN_ID, log_msg, parse_mode="HTML")
+        except:
+            pass
+        
+    except Exception as e:
+        error_msg = f"""
+❌ <b>EXPORT FAILED</b>
+
+<b>Error:</b> <code>{str(e)}</code>
+
+<b>Please check:</b>
+1. Disk space is available
+2. File permissions
+3. Data integrity
+        """
+        try:
+            bot.edit_message_text(
+                error_msg,
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id,
+                parse_mode="HTML"
+            )
+        except:
+            bot.reply_to(message, error_msg, parse_mode="HTML")
+        logging.error(f"Export error: {e}")
+
+# ========== /CLEANBACKUPS COMMAND ==========
+@bot.message_handler(commands=['cleanbackups'])
+def handle_clean_backups(message):
+    """Clean old backup files from data directory"""
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    
+    try:
+        # List all backup files
+        backup_files = [f for f in os.listdir(DATA_DIR) if f.startswith('backup_') and f.endswith('.json')]
+        backup_files.sort(key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
+        
+        if len(backup_files) <= 5:
+            bot.reply_to(message, f"✅ Only {len(backup_files)} backup files found (keeping all)")
+            return
+        
+        # Keep last 5 files, delete older ones
+        files_to_delete = backup_files[:-5]
+        deleted_count = 0
+        deleted_size = 0
+        
+        for filename in files_to_delete:
+            filepath = os.path.join(DATA_DIR, filename)
+            file_size = os.path.getsize(filepath)
+            os.remove(filepath)
+            deleted_count += 1
+            deleted_size += file_size
+        
+        result_msg = f"""
+🧹 <b>BACKUP CLEANUP COMPLETE</b>
+
+📁 <b>Deleted:</b> {deleted_count} files
+💾 <b>Space Freed:</b> {deleted_size//1024} KB
+📊 <b>Remaining:</b> {len(backup_files) - deleted_count} files
+        """
+        
+        bot.reply_to(message, result_msg, parse_mode="HTML")
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Cleanup failed: {str(e)}")
+
 # ========== /BAN COMMAND ==========
 @bot.message_handler(commands=['ban'])
 def handle_ban_user(message):
@@ -1076,18 +1249,6 @@ def handle_start(message):
             'last_name': message.from_user.last_name or "",
             'start_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        
-        # Auto-save every 10 new users
-        if is_new_user:
-            if len(users_data) % 10 == 0:
-                save_users_data()
-            else:
-                # Quick save for single user
-                try:
-                    with open(USERS_DATA_FILE, 'w') as f:
-                        json.dump(users_data, f, indent=4)
-                except:
-                    pass
         
         # Reset spam counter for legit users
         reset_spam_counter(user_id)
@@ -1539,10 +1700,15 @@ if __name__ == "__main__":
     print("📋 Available Admin Commands:")
     print("• /broadcast - Send message to all users (reply to any message)")
     print("• /impdata - Import JSON data (reply to file)")
+    print("• /exportdata - Export all data as JSON file")
+    print("• /cleanbackups - Clean old backup files")
     print("• /stats - Show bot statistics")
     print("• /backup - Download data backup")
     print("• /ban - Ban a user")
     print("• /setstartmsg - Set custom start message")
+    print("• /getstartmsg - View current start message")
+    print("• /clearstartmsg - Clear custom start message")
+    print("• /savedata - Force save all data")
     print("=" * 60)
     print("🚀 Bot is starting...")
     print("=" * 60)
