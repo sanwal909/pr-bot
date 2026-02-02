@@ -33,16 +33,19 @@ SPAM_TIME_WINDOW = int(os.environ.get("SPAM_TIME_WINDOW", "10"))
 WARNING_MESSAGES = ["⚠️ Please don't spam!", "⚠️ This is your last warning!", "⛔ You are being blocked for spamming!"]
 BLOCK_DURATIONS = [300, 900, 1800]  # 5min, 15min, 30min (seconds)
 
-# Data storage files - Railway persistent volume use karega
-DATA_DIR = "/data"  # Railway volume mount point
-START_MESSAGE_FILE = os.path.join(DATA_DIR, "start_message.json")
-USERS_DATA_FILE = os.path.join(DATA_DIR, "users_data.json")
-SPAM_DATA_FILE = os.path.join(DATA_DIR, "spam_data.json")
+# ============ DATA DIRECTORY SETUP ============
+# Railway volume mount point
+DATA_DIR = "/data"
 
-# Ensure data directory exists
+# Create data directory if it doesn't exist
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
     print(f"✅ Created data directory: {DATA_DIR}")
+
+# Data storage files
+START_MESSAGE_FILE = os.path.join(DATA_DIR, "start_message.json")
+USERS_DATA_FILE = os.path.join(DATA_DIR, "users_data.json")
+SPAM_DATA_FILE = os.path.join(DATA_DIR, "spam_data.json")
 
 # ===============================
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
@@ -50,7 +53,7 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # Initialize data storage
 start_message_data = {}
 users_data = {}
-spam_data = {}  # {user_id: {"requests": [timestamps], "warnings": int, "blocked_until": timestamp, "block_level": int, "ban_reason": str, "banned_by": int}}
+spam_data = {}
 
 # ============ DATA MANAGEMENT FUNCTIONS ============
 def load_data():
@@ -454,6 +457,226 @@ def log_important_event(event_type, user_data=None):
         
     except Exception as e:
         logging.error(f"Log error: {e}")
+
+# ========== /BROADCAST COMMAND ==========
+@bot.message_handler(commands=['broadcast'])
+def handle_broadcast(message):
+    """Broadcast to all users - TEXT, PHOTO, VIDEO, DOCUMENT"""
+    if str(message.from_user.id) != ADMIN_ID:
+        return  # Silent fail for non-admin
+    
+    if not message.reply_to_message:
+        help_text = """
+<b>📢 BROADCAST COMMAND</b>
+
+<code>Reply to any message with /broadcast</code>
+
+<b>Supported Message Types:</b>
+✅ Text messages
+✅ Photos (with caption)
+✅ Videos (with caption)
+✅ Documents (with caption)
+✅ GIFs/Animations
+
+<b>How to use:</b>
+1. Send the message you want to broadcast
+2. Reply to that message with <code>/broadcast</code>
+3. Bot will send to all users
+
+<b>⚠️ Warning:</b> This may take time for large user base.
+        """
+        bot.reply_to(message, help_text, parse_mode="HTML")
+        return
+    
+    replied_msg = message.reply_to_message
+    sent = 0
+    failed = 0
+    skipped = 0
+    
+    # Progress message
+    progress_msg = bot.reply_to(message, "📤 <b>Broadcast Starting...</b>\n\n⏳ Preparing to send...", parse_mode="HTML")
+    
+    total_users = len(users_data)
+    if total_users == 0:
+        bot.edit_message_text(
+            "❌ <b>No users to broadcast</b>", 
+            chat_id=message.chat.id, 
+            message_id=progress_msg.message_id,
+            parse_mode="HTML"
+        )
+        return
+    
+    # Get message details for logging
+    msg_type = "Text"
+    if replied_msg.photo:
+        msg_type = "Photo"
+    elif replied_msg.video:
+        msg_type = "Video"
+    elif replied_msg.document:
+        msg_type = "Document"
+    elif replied_msg.animation:
+        msg_type = "GIF/Animation"
+    
+    print(f"📢 Starting broadcast: {msg_type} to {total_users} users")
+    
+    # Start broadcast in background thread
+    def broadcast_thread():
+        nonlocal sent, failed, skipped
+        user_ids = list(users_data.keys())
+        
+        for idx, user_id_str in enumerate(user_ids):
+            try:
+                user_id = int(user_id_str)
+                
+                # Skip if user is blocked
+                if user_id_str in spam_data:
+                    user_spam_data = spam_data[user_id_str]
+                    if user_spam_data.get("blocked_until", 0) > time.time():
+                        skipped += 1
+                        continue
+                
+                # Send based on message type
+                if replied_msg.photo:
+                    # Send photo with caption
+                    caption = replied_msg.caption or ""
+                    bot.send_photo(
+                        user_id,
+                        photo=replied_msg.photo[-1].file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif replied_msg.video:
+                    # Send video with caption
+                    caption = replied_msg.caption or ""
+                    bot.send_video(
+                        user_id,
+                        video=replied_msg.video.file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif replied_msg.document:
+                    # Send document with caption
+                    caption = replied_msg.caption or ""
+                    bot.send_document(
+                        user_id,
+                        document=replied_msg.document.file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif replied_msg.animation:
+                    # Send animation (GIF) with caption
+                    caption = replied_msg.caption or ""
+                    bot.send_animation(
+                        user_id,
+                        animation=replied_msg.animation.file_id,
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                elif replied_msg.text:
+                    # Send text message
+                    text = replied_msg.text
+                    bot.send_message(user_id, text, parse_mode="HTML")
+                elif replied_msg.caption:
+                    # Send caption only
+                    text = replied_msg.caption
+                    bot.send_message(user_id, text, parse_mode="HTML")
+                else:
+                    # Unsupported message type
+                    failed += 1
+                    continue
+                
+                sent += 1
+                
+                # Update progress every 10 users
+                if idx % 10 == 0 or idx == total_users - 1:
+                    percent = int((idx + 1) / total_users * 100)
+                    status_text = f"""
+📤 <b>Broadcasting...</b>
+
+📊 Progress: <b>{percent}%</b>
+┌─────────────────────┐
+│ ✅ Sent: {sent:>6}   │
+│ ❌ Failed: {failed:>5} │
+│ ⏭️ Skipped: {skipped:>4} │
+│ 👥 Total: {total_users:>6} │
+└─────────────────────┘
+
+⏰ <b>Message Type:</b> {msg_type}
+                    """
+                    try:
+                        bot.edit_message_text(
+                            status_text,
+                            chat_id=message.chat.id,
+                            message_id=progress_msg.message_id,
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+                
+                # Small delay to avoid flooding
+                time.sleep(0.1)
+                
+            except telebot.apihelper.ApiTelegramException as e:
+                if "blocked" in str(e) or "deactivated" in str(e):
+                    # User blocked the bot
+                    failed += 1
+                elif "Too Many Requests" in str(e):
+                    # Rate limit hit, wait and continue
+                    time.sleep(2)
+                    failed += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+        
+        # Final result
+        final_text = f"""
+✅ <b>BROADCAST COMPLETE!</b>
+
+📊 <b>Results:</b>
+┌─────────────────────┐
+│ ✅ Successfully Sent: {sent}   │
+│ ❌ Failed to Send: {failed} │
+│ ⏭️ Skipped (Blocked): {skipped} │
+│ 👥 Total Users: {total_users} │
+└─────────────────────┘
+
+📝 <b>Message Type:</b> {msg_type}
+⏰ <b>Completed at:</b> {datetime.now().strftime("%H:%M:%S")}
+
+<b>✅ Broadcast successfully delivered to {sent} users.</b>
+        """
+        
+        try:
+            bot.edit_message_text(
+                final_text,
+                chat_id=message.chat.id,
+                message_id=progress_msg.message_id,
+                parse_mode="HTML"
+            )
+        except:
+            pass
+        
+        # Log to admin
+        try:
+            log_msg = f"""
+📢 <b>BROADCAST COMPLETED</b>
+
+👮 Admin: @{message.from_user.username if message.from_user.username else message.from_user.id}
+📊 Results: {sent} sent, {failed} failed, {skipped} skipped
+📝 Type: {msg_type}
+👥 Total Users: {total_users}
+🕒 Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            """
+            bot.send_message(ADMIN_ID, log_msg, parse_mode="HTML")
+        except:
+            pass
+    
+    # Start broadcast in background
+    thread = threading.Thread(target=broadcast_thread, daemon=True)
+    thread.start()
+    
+    bot.reply_to(message, f"📢 <b>Broadcast started!</b>\n\n⏳ Sending {msg_type} to {total_users} users...", parse_mode="HTML")
 
 # ========== /IMPDATA COMMAND ==========
 @bot.message_handler(commands=['impdata'])
@@ -1167,12 +1390,16 @@ def handle_stats(message):
     current_time = time.time()
     blocked_users = sum(1 for u in spam_data.values() if u.get("blocked_until", 0) > current_time)
     
+    # Count new users today
+    today = datetime.now().strftime('%Y-%m-%d')
+    new_today = sum(1 for u in users_data.values() if u.get('start_time', '').startswith(today))
+    
     stats_text = f"""
 <b>📊 BOT STATISTICS</b>
 
 👥 <b>Users:</b>
 • Total Users: {len(users_data)}
-• New Today: {sum(1 for u in users_data.values() if u.get('start_time', '').startswith(datetime.now().strftime('%Y-%m-%d')))}
+• New Today: {new_today}
 
 🛡️ <b>Spam Protection:</b>
 • Tracked Users: {len(spam_data)}
@@ -1310,10 +1537,10 @@ if __name__ == "__main__":
     print(f"✅ Spam Protection: Active (Max: {MAX_SPAM_COUNT} in {SPAM_TIME_WINDOW}s)")
     print("=" * 60)
     print("📋 Available Admin Commands:")
+    print("• /broadcast - Send message to all users (reply to any message)")
     print("• /impdata - Import JSON data (reply to file)")
     print("• /stats - Show bot statistics")
     print("• /backup - Download data backup")
-    print("• /savedata - Force save all data")
     print("• /ban - Ban a user")
     print("• /setstartmsg - Set custom start message")
     print("=" * 60)
