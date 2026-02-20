@@ -10,7 +10,43 @@ import json
 import os
 import sys
 
-# Setup logging
+# File ke starting mein ye code add karein (line 22 ke baad)
+print("=" * 60)
+print("🔍 DEBUGGING TOKEN LOADING")
+print("=" * 60)
+
+# Check all environment variables
+print(f"All env vars: {list(os.environ.keys())}")
+
+# Check BOT_TOKEN specifically
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+print(f"BOT_TOKEN from env: {'✅ FOUND' if BOT_TOKEN else '❌ NOT FOUND'}")
+if BOT_TOKEN:
+    print(f"Token starts with: {BOT_TOKEN[:10]}...")
+    print(f"Token length: {len(BOT_TOKEN)}")
+    
+    # Test token immediately
+    import requests
+    try:
+        test_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        print(f"Testing URL: {test_url[:50]}...")
+        
+        response = requests.get(test_url, timeout=10)
+        print(f"Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            bot_info = response.json()
+            print(f"✅ Token VALID! Bot: @{bot_info['result']['username']}")
+        else:
+            print(f"❌ Token INVALID! Response: {response.json()}")
+            print("💡 Please get new token from @BotFather")
+    except Exception as e:
+        print(f"❌ Error testing token: {e}")
+else:
+    print("❌ BOT_TOKEN environment variable is not set!")
+    print("💡 Set it in Railway Dashboard -> Variables")
+
+print("=" * 60)# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
