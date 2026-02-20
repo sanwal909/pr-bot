@@ -46,7 +46,9 @@ else:
     print("❌ BOT_TOKEN environment variable is not set!")
     print("💡 Set it in Railway Dashboard -> Variables")
 
-print("=" * 60)# Setup logging
+print("=" * 60)
+
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -597,40 +599,26 @@ def handle_multi_broadcast(message):
     # Wait for all media to arrive (Telegram sends album messages with slight delay)
     time.sleep(3)
     
-    # Now collect all messages with this media_group_id from recent history
+    # Get all messages with this media_group_id
     collected_messages = []
+    collected_messages.append(replied_msg)
     
     try:
         # Get recent messages to find all in the group
-        # Note: This is a workaround since Telegram API doesn't have direct method
-        # We'll get last 50 messages and filter by media_group_id
-        messages_history = []
-        
-        # Get messages before the replied message
-        msg_id = replied_msg.message_id
-        for i in range(10):  # Check 10 messages before
+        # This is a workaround - we'll get last 20 messages and check
+        for i in range(1, 20):
             try:
-                # We'll use a different approach - forward messages to collect them
-                # For now, we'll rely on the user to provide all media
+                # Try to get message by ID
+                msg = bot.get_chat_member(chat_id, i)  # This won't work for messages
+                # Alternative approach not easily possible without message IDs
                 pass
             except:
                 pass
         
-        # Alternative approach: Forward all media to a temp chat and collect
-        # For simplicity, we'll create a media group from the replied message
-        # and assume it's the first in group
-        
-        # Get the actual media group by forwarding to a temporary location
-        # But forwarding isn't ideal as it creates new messages
-        
-        # Better approach: Use the media_group_id and collect all messages with same ID
-        # Since we can't get them directly, we'll use a workaround
-        
-        # Send a request to get updates but that's complex
-        
-        # Simple solution: Ask user to provide all media IDs manually
+        # Since we can't easily get all messages, we'll assume the user sent them as album
+        # and ask them to use /albumcast instead
         bot.edit_message_text(
-            "⚠️ <b>Cannot automatically detect all media.</b>\n\nPlease use <code>/albumcast</code> command with media IDs.",
+            "⚠️ <b>Cannot automatically detect all media.</b>\n\nPlease use <code>/albumcast</code> command with media count.",
             chat_id=message.chat.id,
             message_id=progress_msg.message_id,
             parse_mode="HTML"
@@ -832,7 +820,8 @@ def handle_album_callbacks(call):
         bot.answer_callback_query(call.id, "Admin only!")
         return
     
-    action, queue_id = call.data.split('_')[1], '_'.join(call.data.split('_')[2:])
+    action = call.data.split('_')[1]
+    queue_id = '_'.join(call.data.split('_')[2:])
     
     if queue_id not in broadcast_queue:
         bot.answer_callback_query(call.id, "Album session expired!")
@@ -886,7 +875,7 @@ def handle_album_callbacks(call):
         bot.answer_callback_query(call.id)
 
 # Handle caption input for album
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_album_caption(message):
     """Handle caption input for album broadcast"""
     if str(message.from_user.id) != ADMIN_ID:
@@ -2120,6 +2109,7 @@ def handle_payment_done(call):
     processing_msg = bot.send_message(
         chat_id,
         "🔍 <b>Verifying Payment...</b>\n\n⏳ Please wait 10 seconds...",
+        parse_mode="HTML"
     )
     
     bot.answer_callback_query(call.id)
@@ -2149,7 +2139,8 @@ Progress: [{progress}] {(i+1)*10}%
                 bot.edit_message_text(
                     status,
                     chat_id=chat_id,
-                    message_id=message_id
+                    message_id=message_id,
+                    parse_mode="HTML"
                 )
             except:
                 pass
@@ -2175,7 +2166,8 @@ Progress: [{progress}] {(i+1)*10}%
             failed_msg,
             chat_id=chat_id,
             message_id=message_id,
-            reply_markup=premium_bot.after_payment_keyboard()
+            reply_markup=premium_bot.after_payment_keyboard(),
+            parse_mode="HTML"
         )
         
     except Exception as e:
